@@ -21,12 +21,27 @@ namespace ShopeeServer
         static async Task Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            Console.WriteLine("=== SHOPEE WMS SERVER (REALTIME DATA) ===");
+            Console.WriteLine("=== SHOPEE WMS SERVER ===");
 
             if (string.IsNullOrEmpty(ShopeeApiHelper.AccessToken))
             {
-                Console.WriteLine("[WARN] Chưa có Token. Hãy chạy lại quy trình đăng nhập.");
-                return; // Đơn giản hóa
+                Console.WriteLine("\n[WARN] Chưa có Token. Vui lòng Login:");
+                Console.WriteLine(ShopeeApiHelper.GetAuthUrl());
+                Console.Write("Callback URL: ");
+                string cb = Console.ReadLine()?.Trim() ?? "";
+                if (!string.IsNullOrEmpty(cb))
+                {
+                    try
+                    {
+                        var q = QueryHelpers.ParseQuery(new Uri(cb).Query);
+                        long sid = long.Parse(q["shop_id"]!);
+                        if (await ShopeeApiHelper.ExchangeCodeForToken(sid, q["code"]!))
+                            Console.WriteLine("[OK] Đã lưu Token.");
+                        else return;
+                    }
+                    catch { Console.WriteLine("Lỗi Login."); return; }
+                }
+                else return;
             }
 
             _ = Task.Run(async () => {
@@ -46,7 +61,7 @@ namespace ShopeeServer
             long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), from = DateTimeOffset.UtcNow.AddDays(-15).ToUnixTimeSeconds();
 
             string json = await ShopeeApiHelper.GetOrderList(from, to);
-            if (json.Contains("error_auth"))
+            if (json.Contains("\"error\":\"invalid_acceess_token\""))
             {
                 if (await ShopeeApiHelper.RefreshTokenNow()) json = await ShopeeApiHelper.GetOrderList(from, to);
                 else return;
@@ -130,8 +145,7 @@ namespace ShopeeServer
                     if (url == "/")
                     {
                         byte[] b = Encoding.UTF8.GetBytes(HtmlTemplates.Index);
-                        resp.ContentType = "text/html; charset=utf-8"; // Fix lỗi trắng trang
-                        resp.OutputStream.Write(b, 0, b.Length);
+                        resp.ContentType = "text/html; charset=utf-8"; resp.OutputStream.Write(b, 0, b.Length);
                     }
                     else if (url == "/api/data")
                     {
@@ -139,59 +153,46 @@ namespace ShopeeServer
                         byte[] b = Encoding.UTF8.GetBytes(j);
                         resp.ContentType = "application/json"; resp.OutputStream.Write(b, 0, b.Length);
                     }
-                    else if (url == "/api/assign" && req.HttpMethod == "POST")
+                    else if (url == "/api/assign")
                     {
                         string id = req.QueryString["id"], u = req.QueryString["user"];
                         lock (_lock) { var o = _dbOrders.FirstOrDefault(x => x.OrderId == id); if (o != null) o.AssignedTo = u; }
                         resp.StatusCode = 200;
                     }
-                    else if (url == "/api/ship" && req.HttpMethod == "POST")
+                    else if (url == "/api/ship")
                     {
                         string id = req.QueryString["id"];
                         lock (_lock) { var o = _dbOrders.FirstOrDefault(x => x.OrderId == id); if (o != null) o.Status = 1; }
                         resp.StatusCode = 200;
                     }
-
-                    // --- API: LẤY CHI TIẾT SẢN PHẨM & TỒN KHO THẬT ---
-                    else if (url == "/api/product" && req.HttpMethod == "GET")
+                    else if (url == "/api/product")
                     {
                         string sid = req.QueryString["id"];
                         if (long.TryParse(sid, out long itemId))
                         {
-                            // Gọi Shopee API
                             string rawJson = ShopeeApiHelper.GetItemBaseInfo(itemId).Result;
-
-                            // Parse JSON để lấy đúng Stock và Variation
                             var result = new { success = false, name = "", variations = new List<object>() };
                             using (JsonDocument doc = JsonDocument.Parse(rawJson))
                             {
-                                if (doc.RootElement.TryGetProperty("response", out var r) &&
-                                   r.TryGetProperty("item_list", out var l) &&
-                                   l.GetArrayLength() > 0)
+                                if (doc.RootElement.TryGetProperty("response", out var r) && r.TryGetProperty("item_list", out var l) && l.GetArrayLength() > 0)
                                 {
-
                                     var item = l[0];
                                     string iName = item.GetProperty("item_name").GetString()!;
-                                    string defImg = item.GetProperty("image").GetProperty("image_url_list")[0].GetString()!;
+                                    string defImg = "";
+                                    if (item.TryGetProperty("image", out var imgObj) && imgObj.TryGetProperty("image_url_list", out var iList)) defImg = iList[0].GetString()!;
 
                                     var vars = new List<object>();
                                     if (item.TryGetProperty("model_list", out var ms))
                                     {
                                         foreach (var m in ms.EnumerateArray())
                                         {
-                                            // Logic lấy Stock chuẩn của Shopee
                                             int stock = 0;
                                             if (m.TryGetProperty("stock_info_v2", out var si) && si.TryGetProperty("summary_info", out var sum))
                                                 stock = sum.GetProperty("total_available_stock").GetInt32();
                                             else if (m.TryGetProperty("stock_info", out var oldSi))
                                                 stock = oldSi.EnumerateArray().First().GetProperty("normal_stock").GetInt32();
 
-                                            vars.Add(new
-                                            {
-                                                name = m.GetProperty("model_name").GetString(),
-                                                stock = stock,
-                                                img = defImg // Shopee API này không trả ảnh riêng từng model
-                                            });
+                                            vars.Add(new { name = m.GetProperty("model_name").GetString(), stock = stock, img = defImg });
                                         }
                                     }
                                     result = new { success = true, name = iName, variations = vars };

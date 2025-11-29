@@ -125,8 +125,7 @@ namespace ShopeeServer
             foreach (var k in p) q[k.Key] = k.Value;
 
             using var client = new HttpClient();
-            try { return await client.GetStringAsync(QueryHelpers.AddQueryString(BaseUrl + path, q)); }
-            catch { return "{}"; }
+            return await client.GetStringAsync(QueryHelpers.AddQueryString(BaseUrl + path, q));
         }
 
         public static async Task<string> GetOrderList(long fromDate, long toDate)
@@ -140,10 +139,8 @@ namespace ShopeeServer
             return await CallApi("/api/v2/order/get_order_detail", new Dictionary<string, string> { { "order_sn_list", sns }, { "response_optional_fields", "item_list" } });
         }
 
-        // --- API MỚI: Lấy thông tin sản phẩm (bao gồm Stock) ---
         public static async Task<string> GetItemBaseInfo(long itemId)
         {
-            // Cần lấy model_list (để xem phân loại) và stock_info (để xem tồn kho)
             return await CallApi("/api/v2/product/get_item_base_info", new Dictionary<string, string> {
                 { "item_id_list", itemId.ToString() },
                 { "response_optional_fields", "model_list,image,stock_info" }
