@@ -263,7 +263,7 @@ namespace ShopeeServer
                             if (shipPayload != null)
                             {
                                 string shipRes = await ShopeeApiHelper.ShipOrder(shipPayload);
-                                Console.WriteLine($"[SHIP KẾT QUẢ] shipRes");
+                                Console.WriteLine($"[SHIP KẾT QUẢ] {shipRes}");
                             }
                             else
                             {
