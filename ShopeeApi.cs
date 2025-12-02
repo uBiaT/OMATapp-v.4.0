@@ -76,12 +76,12 @@ namespace ShopeeServer
                     File.WriteAllText(filePath, jsonNode.ToJsonString(options));
 
                     ShopId = shopId; AccessToken = accessToken; RefreshToken = refreshToken;
-                    Console.WriteLine("[Config] Đã lưu Token mới.");
+                    Program.Log("[Config] Đã lưu Token mới.");
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Save Error] {ex.Message}");
+                Program.Log($"[Save Error] {ex.Message}");
                 SaveTokenToConfig(ShopId, "","");
             }
         }
@@ -108,7 +108,7 @@ namespace ShopeeServer
 
         public static async Task<bool> RefreshTokenNow()
         {
-            Console.WriteLine("[Auto-Refresh] Đang gia hạn Token...");
+            Program.Log("[Auto-Refresh] Đang gia hạn Token...");
             return await PostAuth("/api/v2/auth/access_token/get", new { partner_id = PartnerId, shop_id = ShopId, refresh_token = RefreshToken });
         }
 
@@ -131,13 +131,13 @@ namespace ShopeeServer
                     SaveTokenToConfig(sid, t.GetString()!, doc.RootElement.GetProperty("refresh_token").GetString()!);
                     return true;
                 }
-                Console.WriteLine($"[Auth Fail] {json}");
+                Program.Log($"[Auth Fail] {json}");
             }
-            catch (Exception ex) { Console.WriteLine($"[Auth Ex] {ex.Message}"); }
+            catch (Exception ex) { Program.Log($"[Auth Ex] {ex.Message}"); }
             return false;
         }
 
-        public static async Task<string> CallApi(string path, Dictionary<string, string> p)
+        public static async Task<string> CallGetAPI(string path, Dictionary<string, string> p)
         {
             if (string.IsNullOrEmpty(AccessToken)) return "{\"error\":\"no_token\"}";
 
@@ -145,25 +145,21 @@ namespace ShopeeServer
             string sign = GenerateSignature(path, ts);
 
             var q = new Dictionary<string, string?> {
-        { "partner_id", PartnerId.ToString() },
-        { "timestamp", ts.ToString() },
-        { "access_token", AccessToken },
-        { "shop_id", ShopId.ToString() },
-        { "sign", sign }
-    };
+                { "partner_id", PartnerId.ToString() },
+                { "timestamp", ts.ToString() },
+                { "access_token", AccessToken },
+                { "shop_id", ShopId.ToString() },
+                { "sign", sign }
+            };
             foreach (var k in p) q[k.Key] = k.Value;
 
             // Tạo URL đầy đủ để debug nếu cần
             string requestUrl = QueryHelpers.AddQueryString(BaseUrl + path, q);
 
             // In ra Console (màu xám hoặc vàng) để dễ nhìn
-            Console.WriteLine($"[API-GET] {requestUrl}");
+            Program.Log($"[API-GET] {path}");
 
             using var client = new HttpClient();
-
-            // --- KHẮC PHỤC LỖI CRASH Ở ĐÂY ---
-            // 1. Thêm User-Agent giả lập Chrome để vượt qua tường lửa Shopee
-            //client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
             try
             {
@@ -178,16 +174,16 @@ namespace ShopeeServer
             catch (HttpRequestException httpEx)
             {
                 // In lỗi cụ thể: Ví dụ "403 Forbidden" hay "404 Not Found"
-                Console.WriteLine($"[HTTP ERR] {httpEx.StatusCode} - {httpEx.Message}");
+                Program.Log($"[HTTP ERR] {httpEx.StatusCode} - {httpEx.Message}");
                 return "{\"error\":\"network_error\", \"detail\":\"" + httpEx.Message + "\"}";
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[API ERR] {ex.Message}");
+                Program.Log($"[API ERR] {ex.Message}");
                 return "{\"error\":\"network_error\"}";
             }
         }
-        public static async Task<string> CallPost(string path, object body)
+        public static async Task<string> CallPostAPI(string path, object body)
         {
             if (string.IsNullOrEmpty(AccessToken)) return "{\"error\":\"no_token\"}";
             long ts = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -195,7 +191,6 @@ namespace ShopeeServer
             string url = $"{BaseUrl}{path}?partner_id={PartnerId}&timestamp={ts}&access_token={AccessToken}&shop_id={ShopId}&sign={sign}";
 
             using var client = new HttpClient();
-            //client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
             var content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
             try
             {
@@ -227,20 +222,20 @@ namespace ShopeeServer
                 { "time_range_field", "create_time" }, { "time_from", fromDate.ToString() },
                 { "time_to", toDate.ToString() }, { "page_size", "100" }, { "order_status", "READY_TO_SHIP" }
             };
-            return await CallApi("/api/v2/order/get_order_list", p);
+            return await CallGetAPI("/api/v2/order/get_order_list", p);
         }
 
         public static async Task<string> GetOrderDetails(string sns)
         {
-            return await CallApi("/api/v2/order/get_order_detail", new Dictionary<string, string> {
+            return await CallGetAPI("/api/v2/order/get_order_detail", new Dictionary<string, string> {
                 { "order_sn_list", sns }, { "response_optional_fields", "item_list" }
             });
         }
 
-        public static async Task<string> GetItemBaseInfo(long itemId)
+        public static async Task<string> GetItemModelList(long itemId)
         {
-            return await CallApi("/api/v2/product/get_item_base_info", new Dictionary<string, string> {
-                { "item_id_list", itemId.ToString() }, { "response_optional_fields", "model_list,image,stock_info_v2" }
+            return await CallGetAPI("/api/v2/product/get_model_list", new Dictionary<string, string> {
+                { "item_id", itemId.ToString() }
             });
         }
 
@@ -248,19 +243,19 @@ namespace ShopeeServer
 
         // B1: Lấy tham số vận chuyển (Pickup hay Dropoff?)
         public static async Task<string> GetShippingParam(string sn) =>
-            await CallApi("/api/v2/logistics/get_shipping_parameter", new Dictionary<string, string> { { "order_sn", sn } });
+            await CallGetAPI("/api/v2/logistics/get_shipping_parameter", new Dictionary<string, string> { { "order_sn", sn } });
 
         // B2: Báo chuẩn bị hàng
         public static async Task<string> ShipOrder(object payload) =>
-            await CallPost("/api/v2/logistics/ship_order", payload);
+            await CallPostAPI("/api/v2/logistics/ship_order", payload);
 
         // B3: Tạo yêu cầu in (In Nhiệt)
         public static async Task<string> CreateDoc(string sn) =>
-            await CallPost("/api/v2/logistics/create_shipping_document", new { order_list = new[] { new { order_sn = sn } }, shipping_document_type = "THERMAL_AIR_WAYBILL" });
+            await CallPostAPI("/api/v2/logistics/create_shipping_document", new { order_list = new[] { new { order_sn = sn } }, shipping_document_type = "THERMAL_AIR_WAYBILL" });
 
         // B4: Kiểm tra trạng thái tạo file
         public static async Task<string> GetDocResult(string sn) =>
-            await CallPost("/api/v2/logistics/get_shipping_document_result", new { order_list = new[] { new { order_sn = sn } } });
+            await CallPostAPI("/api/v2/logistics/get_shipping_document_result", new { order_list = new[] { new { order_sn = sn } } });
 
         // B5: Tải file PDF
         public static async Task<byte[]> DownloadDoc(string sn) =>

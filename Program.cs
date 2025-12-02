@@ -13,16 +13,37 @@ using Microsoft.AspNetCore.WebUtilities;
 
 namespace ShopeeServer
 {
-
     class Program
     {
+        // --- 1. HỆ THỐNG LOG VÀO BỘ NHỚ ---
+        private static List<string> _serverLogs = new List<string>();
+
+        public static void Log(string msg)
+        {
+            try
+            {
+                string time = DateTime.Now.ToString("HH:mm:ss");
+                string logLine = $"[{time}] {msg}";
+
+                // In ra Console
+                Console.WriteLine(logLine);
+
+                // Lưu vào RAM để hiển thị lên Web
+                lock (_lock)
+                {
+                    _serverLogs.Insert(0, logLine); // Thêm vào đầu
+                    if (_serverLogs.Count > 200) _serverLogs.RemoveAt(_serverLogs.Count - 1); // Giới hạn 200 dòng
+                }
+            }
+            catch { }
+        }
+
         private static readonly Regex LocationRegex = new Regex(@"^\[(?<Shelf>\d+)N(?<Level>\d+)(?:-(?<Box>\d+))?\]", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
         public static Dictionary<string, string> GetItemLocation(string input)
         {
             var resultData = new Dictionary<string, string>();
-
             if (string.IsNullOrEmpty(input)) return resultData;
-
             var match = LocationRegex.Match(input);
             if (match.Success)
             {
@@ -30,7 +51,6 @@ namespace ShopeeServer
                 resultData["Level"] = match.Groups["Level"].Value;
                 if (match.Groups["Box"].Success) resultData["Box"] = match.Groups["Box"].Value;
             }
-
             return resultData;
         }
 
@@ -40,58 +60,35 @@ namespace ShopeeServer
         static async Task Main(string[] args)
         {
             Console.OutputEncoding = Encoding.UTF8;
-            Console.WriteLine("=== SHOPEE WMS SERVER v4.1 (Debug Mode) ===");
+            Log("=== SHOPEE WMS SERVER WEB-UI v5.0 ===");
 
             try
             {
-                // 1. CHECK AUTH
+                // 1. CHECK AUTH: Không chặn màn hình đen nữa, chỉ cảnh báo log
                 if (string.IsNullOrEmpty(ShopeeApiHelper.AccessToken))
                 {
-                    Console.WriteLine("\n[WARN] Chưa có Token. Vui lòng Login:");
-                    Console.WriteLine(ShopeeApiHelper.GetAuthUrl());
-                    Console.Write("Callback URL: ");
-                    string cb = Console.ReadLine()?.Trim() ?? "";
-                    if (!string.IsNullOrEmpty(cb))
-                    {
-                        var q = QueryHelpers.ParseQuery(new Uri(cb).Query);
-                        long sid = long.Parse(q["shop_id"]!);
-                        if (await ShopeeApiHelper.ExchangeCodeForToken(sid, q["code"]!))
-                            Console.WriteLine("[OK] Đã lưu Token.");
-                        else
-                        {
-                            Console.WriteLine("Lỗi Login. Nhấn Enter để thoát...");
-                            Console.ReadLine();
-                            return;
-                        }
-                    }
-                    else return;
+                    Log("[WARN] Chưa có Token. Vui lòng vào Tab 'Hệ thống' trên Web để đăng nhập.");
                 }
 
-                // 2. START SYNC
+                // 2. START SYNC (Chạy ngầm)
                 _ = Task.Run(async () => {
                     while (true)
                     {
                         try { await CoreEngineSync(); }
-                        catch (Exception ex) { Console.WriteLine($"[SyncErr] {ex.Message}"); }
-                        await Task.Delay(TimeSpan.FromMinutes(1));
+                        catch (Exception ex) { Log($"[SyncErr] {ex.Message}"); }
+                        await Task.Delay(TimeSpan.FromMinutes(1)); // Đồng bộ mỗi 1 phút
                     }
                 });
 
                 // 3. START SERVER
-                // --- SỬA ĐỔI 2: Dùng await để giữ Main không thoát ---
                 await StartServer();
             }
             catch (Exception ex)
             {
-                // --- SỬA ĐỔI 3: Bắt lỗi Crash ---
-                Console.WriteLine("\n\n*********************************");
-                Console.WriteLine("CRITICAL ERROR (LỖI NGHIÊM TRỌNG):");
-                Console.WriteLine(ex.ToString());
-                Console.WriteLine("*********************************");
+                Log($"CRITICAL ERROR: {ex}");
             }
             finally
             {
-                // --- SỬA ĐỔI 4: Giữ cửa sổ luôn mở ---
                 Console.WriteLine("\nApp đã dừng. Nhấn Enter để thoát...");
                 Console.ReadLine();
             }
@@ -99,13 +96,23 @@ namespace ShopeeServer
 
         static async Task CoreEngineSync()
         {
-            Console.WriteLine($"[{DateTime.Now:HH:mm}] Syncing...");
+            // Nếu chưa có Token thì bỏ qua vòng này
+            if (string.IsNullOrEmpty(ShopeeApiHelper.AccessToken)) return;
+
+            Log("Đang đồng bộ đơn hàng từ Shopee...");
             long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), from = DateTimeOffset.UtcNow.AddDays(-15).ToUnixTimeSeconds();
 
             string json = await ShopeeApiHelper.GetOrderList(from, to);
+
+            // Xử lý khi Token hết hạn hoặc lỗi mạng
             if (!json.Contains("\"response\""))
             {
-                if (await ShopeeApiHelper.RefreshTokenNow()) json = await ShopeeApiHelper.GetOrderList(from, to);
+                Log($"Lỗi lấy danh sách đơn: {json}");
+                if (await ShopeeApiHelper.RefreshTokenNow())
+                {
+                    Log("Đã gia hạn Token thành công. Thử lại...");
+                    json = await ShopeeApiHelper.GetOrderList(from, to);
+                }
                 else return;
             }
 
@@ -116,14 +123,16 @@ namespace ShopeeServer
                     foreach (var i in l.EnumerateArray()) liveIds.Add(i.GetProperty("order_sn").GetString()!);
             }
 
+            // Xóa đơn cũ (chưa xử lý) không còn trên hệ thống
             lock (_lock) { _dbOrders.RemoveAll(o => o.Status == 0 && !liveIds.Contains(o.OrderId)); }
 
+            // Tìm đơn mới
             List<string> newIds;
             lock (_lock) { newIds = liveIds.Where(id => !_dbOrders.Any(o => o.OrderId == id)).ToList(); }
 
             if (newIds.Count > 0)
             {
-                Console.WriteLine($"Phát hiện {newIds.Count} đơn mới.");
+                Log($"Phát hiện {newIds.Count} đơn mới. Đang tải chi tiết...");
                 for (int i = 0; i < newIds.Count; i += 50)
                 {
                     string snStr = string.Join(",", newIds.Skip(i).Take(50));
@@ -160,102 +169,195 @@ namespace ShopeeServer
                         }
                     }
                 }
+                Log("Đã tải xong chi tiết đơn hàng.");
             }
         }
 
         static async Task StartServer()
         {
             var listener = new HttpListener();
-            listener.Prefixes.Add("http://localhost:8080/");
+            listener.Prefixes.Add("http://+:8080/");
             try
             {
                 listener.Start();
-                Console.WriteLine("Web: http://localhost:8080/");
+                Log("Web Server đang chạy tại: http://localhost:8080/");
                 try { Process.Start(new ProcessStartInfo("http://localhost:8080/") { UseShellExecute = true }); } catch { }
             }
-            catch (HttpListenerException hlex)
+            catch (Exception ex)
             {
-                // Lỗi này thường do chưa chạy quyền Admin
-                Console.WriteLine($"[LỖI 8080] Không thể mở Port 8080. Hãy chạy App bằng 'Run as Administrator'.");
-                Console.WriteLine($"Chi tiết: {hlex.Message}");
-                return; // Thoát hàm StartServer, sẽ rơi xuống finally của Main
+                Log($"LỖI KHỞI ĐỘNG SERVER (Port 8080): {ex.Message}");
+                Log("Hãy thử chạy phần mềm với quyền Admin (Run as Administrator).");
+                return;
             }
 
             while (true)
             {
                 try
                 {
-                    var ctx = await listener.GetContextAsync(); // Dùng Async để mượt hơn
+                    var ctx = await listener.GetContextAsync();
                     var req = ctx.Request;
                     var resp = ctx.Response;
                     string url = req.Url.AbsolutePath;
 
-                    // ... (Logic Router giữ nguyên: /, /api/data, /api/assign) ...
-
+                    // 1. GIAO DIỆN CHÍNH
                     if (url == "/")
                     {
                         byte[] b = Encoding.UTF8.GetBytes(HtmlTemplates.Index);
                         resp.ContentType = "text/html; charset=utf-8"; resp.OutputStream.Write(b, 0, b.Length);
                     }
+                    // 2. API DỮ LIỆU CHÍNH (Kèm trạng thái Login)
                     else if (url == "/api/data")
                     {
-                        string j; lock (_lock) { j = JsonSerializer.Serialize(_dbOrders); }
+                        var data = new
+                        {
+                            orders = _dbOrders,
+                            hasToken = !string.IsNullOrEmpty(ShopeeApiHelper.AccessToken),
+                            loginUrl = ShopeeApiHelper.GetAuthUrl()
+                        };
+                        string j; lock (_lock) { j = JsonSerializer.Serialize(data); }
                         byte[] b = Encoding.UTF8.GetBytes(j);
                         resp.ContentType = "application/json"; resp.OutputStream.Write(b, 0, b.Length);
                     }
+                    // 3. API GÁN NHÂN VIÊN
+                    //else if (url == "/api/assign")
+                    //{
+                    //    string id = req.QueryString["id"], u = req.QueryString["user"];
+                    //    lock (_lock) { var o = _dbOrders.FirstOrDefault(x => x.OrderId == id); if (o != null) o.AssignedTo = u; }
+                    //    resp.StatusCode = 200;
+                    //}
+                    // 4. API LẤY CHI TIẾT SẢN PHẨM (Để xem ảnh to/tồn kho)
+                    else if (url == "/api/product")
+                    {
+                        string sid = req.QueryString["id"];
+                        if (long.TryParse(sid, out long itemId))
+                        {
+                            string rawJson = ShopeeApiHelper.GetItemModelList(itemId).Result;
+                            var result = new { success = false, name = "", variations = new List<object>() };
+
+                            using (JsonDocument doc = JsonDocument.Parse(rawJson))
+                            {
+                                if (doc.RootElement.TryGetProperty("response", out var r) && r.TryGetProperty("standardise_tier_variation", out var v) && v.GetArrayLength() > 0)
+                                {
+                                    var v1 = v[0];
+                                    //string iName = item.GetProperty("item_name").GetString()!;
+                                    //string defImg = item.GetProperty("image").GetProperty("image_url_list")[0].GetString()!;
+
+                                    var vars = new List<object>();
+                                    if (v1.TryGetProperty("variation_option_list", out var vlist))
+                                    {
+                                        foreach (var m in vlist.EnumerateArray())
+                                        {
+                                            //int stock = 0;
+                                            // Logic lấy Stock V2: stock_info_v2 -> summary_info -> total_available_stock
+                                            //if (m.TryGetProperty("stock_info_v2", out var si) && si.TryGetProperty("summary_info", out var sum))
+                                            //    stock = sum.GetProperty("total_available_stock").GetInt32();
+                                            // Fallback V1
+                                            //else if (m.TryGetProperty("stock_info", out var oldSi) && oldSi.GetArrayLength() > 0)
+                                            //    stock = oldSi[0].GetProperty("normal_stock").GetInt32();
+
+                                            vars.Add(new { name = m.GetProperty("variation_option_name").GetString(), stock = "stock", img = m.GetProperty("image_url").GetString() });
+                                        }
+                                    }
+                                    else
+                                    {
+                                        //int stock = 0;
+                                        //if (v1.TryGetProperty("stock_info_v2", out var si) && si.TryGetProperty("summary_info", out var sum))
+                                        //    stock = sum.GetProperty("total_available_stock").GetInt32();
+                                        //vars.Add(new { name = "Mặc định", stock = stock, img = defImg });
+                                    }
+                                    result = new { success = true, name = "iName", variations = vars };
+                                }
+                            }
+                            byte[] b = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(result));
+                            resp.ContentType = "application/json"; resp.OutputStream.Write(b, 0, b.Length);
+                        }
+                    }
+                    // 5. API MỚI: LẤY LOG HỆ THỐNG
+                    else if (url == "/api/logs")
+                    {
+                        string j; lock (_lock) { j = JsonSerializer.Serialize(_serverLogs); }
+                        byte[] b = Encoding.UTF8.GetBytes(j);
+                        resp.ContentType = "application/json"; resp.OutputStream.Write(b, 0, b.Length);
+                    }
+                    // 6. API MỚI: XỬ LÝ LOGIN TỪ WEB
+                    else if (url == "/api/login" && req.HttpMethod == "POST")
+                    {
+                        using var reader = new StreamReader(req.InputStream, req.ContentEncoding);
+                        string body = await reader.ReadToEndAsync();
+
+                        try
+                        {
+                            string fullUrl = body;
+                            // Parse JSON đơn giản nếu body gửi lên là {"url": "..."}
+                            if (body.StartsWith("{"))
+                            {
+                                using (JsonDocument tmp = JsonDocument.Parse(body))
+                                    if (tmp.RootElement.TryGetProperty("url", out var u)) fullUrl = u.GetString();
+                            }
+
+                            if (!fullUrl.Contains("code=")) throw new Exception("Link không chứa mã code!");
+
+                            var uri = new Uri(fullUrl);
+                            var q = QueryHelpers.ParseQuery(uri.Query);
+                            long sid = long.Parse(q["shop_id"]!);
+                            string code = q["code"]!;
+
+                            Log($"Đang xử lý đăng nhập cho Shop ID: {sid}...");
+                            bool ok = await ShopeeApiHelper.ExchangeCodeForToken(sid, code);
+
+                            string msg = ok ? "{\"success\":true}" : "{\"success\":false, \"message\":\"Lỗi Shopee API (Check Log)\"}";
+                            if (ok) Log("=> Đăng nhập thành công! Token đã được lưu."); else Log("=> Đăng nhập thất bại.");
+
+                            byte[] b = Encoding.UTF8.GetBytes(msg);
+                            resp.ContentType = "application/json"; resp.OutputStream.Write(b, 0, b.Length);
+                        }
+                        catch (Exception ex)
+                        {
+                            Log($"Lỗi Login Web: {ex.Message}");
+                            byte[] b = Encoding.UTF8.GetBytes("{\"success\":false, \"message\":\"Lỗi xử lý link\"}");
+                            resp.OutputStream.Write(b, 0, b.Length);
+                        }
+                    }
+                    // 7. API SHIP ĐƠN HÀNG
                     else if (url == "/api/ship" && req.HttpMethod == "POST")
                     {
                         string sn = req.QueryString["id"];
-                        Console.WriteLine($"[SHIP] Đang xử lý đơn: {sn}");
+                        Log($"[SHIP] Bắt đầu xử lý đơn: {sn}");
 
-                        // --- FIX LOGIC CALL API ---
                         try
                         {
-                            // 1. Lấy tham số ship (quan trọng)
                             string paramJson = await ShopeeApiHelper.GetShippingParam(sn);
-                            Console.WriteLine($"[DEBUG-SHIP] Param: {paramJson}");
+                            Log($"[DEBUG-SHIP] Param: {paramJson}");
 
                             object shipPayload = null;
                             using (var doc = JsonDocument.Parse(paramJson))
                             {
                                 if (doc.RootElement.TryGetProperty("response", out var r))
                                 {
-                                    // 1. Kiểm tra xem Shopee có trả về danh sách địa chỉ lấy hàng (Pickup) không
-                                    // Cấu trúc: response -> pickup -> address_list
+                                    // A. Pickup
                                     if (r.TryGetProperty("pickup", out var pickupData) &&
                                         pickupData.TryGetProperty("address_list", out var addrList) &&
                                         addrList.GetArrayLength() > 0)
                                     {
-                                        // Lấy địa chỉ đầu tiên trong danh sách
                                         var firstAddr = addrList[0];
                                         long addrId = firstAddr.GetProperty("address_id").GetInt64();
-
-                                        // Mẫu JSON của bạn yêu cầu cả "pickup_time_id"
-                                        // Nó nằm trong: address_list[0] -> time_slot_list[0] -> pickup_time_id
                                         string timeId = "";
-                                        if (firstAddr.TryGetProperty("time_slot_list", out var timeList) && timeList.GetArrayLength() > 0)
-                                        {
-                                            timeId = timeList[0].GetProperty("pickup_time_id").GetString();
-                                        }
 
-                                        // Tạo lệnh Ship (Kèm cả ID địa chỉ và ID giờ lấy hàng)
+                                        if (firstAddr.TryGetProperty("time_slot_list", out var timeList) && timeList.GetArrayLength() > 0)
+                                            timeId = timeList[0].GetProperty("pickup_time_id").GetString();
+
                                         shipPayload = new
                                         {
                                             order_sn = sn,
-                                            pickup = new
-                                            {
-                                                address_id = addrId,
-                                                pickup_time_id = timeId
-                                            }
+                                            pickup = new { address_id = addrId, pickup_time_id = timeId }
                                         };
-                                        Console.WriteLine($"-> Mode: PICKUP (Addr: {addrId} | Time: {timeId})");
+                                        Log($"-> Mode: PICKUP (Addr: {addrId} | Time: {timeId})");
                                     }
-                                    // 2. Nếu không phải Pickup thì là Dropoff (Gửi bưu cục)
+                                    // B. Dropoff
                                     else
                                     {
-                                        // Dropoff thường không cần tham số gì phức tạp
                                         shipPayload = new { order_sn = sn, dropoff = new { } };
-                                        Console.WriteLine("-> Mode: DROPOFF");
+                                        Log("-> Mode: DROPOFF");
                                     }
                                 }
                             }
@@ -263,23 +365,33 @@ namespace ShopeeServer
                             if (shipPayload != null)
                             {
                                 string shipRes = await ShopeeApiHelper.ShipOrder(shipPayload);
-                                Console.WriteLine($"[SHIP KẾT QUẢ] {shipRes}");
+                                if (!shipRes.Contains("error"))
+                                {
+                                    Log($"[SHIP OK] Thành công!");
+                                    // Cập nhật trạng thái RAM
+                                    lock (_lock) { var o = _dbOrders.FirstOrDefault(x => x.OrderId == sn); if (o != null) o.Status = 1; }
+                                }
+                                else
+                                {
+                                    Log($"[SHIP ERROR] {shipRes}");
+                                }
                             }
                             else
                             {
-                                Console.WriteLine("[SHIP LỖI] Không xác định được phương thức vận chuyển (Pickup/Dropoff)");
+                                Log("[SHIP LỖI] Không xác định được phương thức Pickup/Dropoff");
                             }
                         }
                         catch (Exception apiEx)
                         {
-                            Console.WriteLine($"[SHIP EXCEPTION] {apiEx.Message}");
+                            Log($"[SHIP EXCEPTION] {apiEx.Message}");
                         }
                     }
+
                     resp.Close();
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SERVER ERR] {ex.Message}");
+                    Log($"[SERVER ERR] {ex.Message}");
                 }
             }
         }

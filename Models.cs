@@ -25,6 +25,7 @@ namespace ShopeeServer
         public string? Shelf { get; set; }
         public string? Level { get; set; }
         public string? Box { get; set; }
+        public string? loc { get; set; }
 
         // Thuộc tính dùng cho giao diện Batch Picking
         public bool Picked { get; set; } = false;
