@@ -94,9 +94,6 @@
                 </button>
             </div>
             
-            <button v-if='isBatchMode && selectedCount > 0' class='btn btn-sm btn-success fw-bold shadow-sm' @click='startPicking'>
-                Đi nhặt ({{selectedCount}})<i class='bi bi-arrow-right'></i>
-            </button>
             <button class='btn btn-sm shadow-sm fw-bold me-2' :class='isBatchMode ? ""btn-danger"" : ""btn-warning""' @click='toggleBatchMode'>
                 {{ isBatchMode ? '❌ Hủy' : '📦 Gom' }}
             </button>
@@ -136,6 +133,10 @@
                 </button>
             </div>
         </div>
+
+        <button v-if='isBatchMode && selectedCount > 0' class='btn btn-sm btn-success btn-float fw-bold shadow-sm' @click='startPicking'>
+            Đi nhặt ({{selectedCount}})<i class='bi bi-arrow-right'></i>
+        </button>
     </div>
 
     <div v-if='currentView === ""picking""'>

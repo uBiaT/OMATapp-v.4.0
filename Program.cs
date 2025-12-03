@@ -38,7 +38,7 @@ namespace ShopeeServer
             catch { }
         }
 
-        private static readonly Regex LocationRegex = new Regex(@"^\[(?<Shelf>\d+)N(?<Level>\d+)(?:-(?<Box>\d+))?\]", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex LocationRegex = new Regex(@"\[(?<Shelf>\d+)N(?<Level>\d+)?(-(?<Box>\d+))?\]", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
         public static Dictionary<string, string> GetItemLocation(string input)
         {
