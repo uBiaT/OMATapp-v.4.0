@@ -157,7 +157,7 @@ namespace ShopeeServer
             string requestUrl = QueryHelpers.AddQueryString(BaseUrl + path, q);
 
             // In ra Console (màu xám hoặc vàng) để dễ nhìn
-            Program.Log($"[API-GET] {path}");
+            Program.Log($"[API-GET] {requestUrl}");
 
             using var client = new HttpClient();
 
@@ -168,6 +168,8 @@ namespace ShopeeServer
 
                 // Nếu Shopee trả về lỗi (403, 400, 500...), ném lỗi ra catch
                 response.EnsureSuccessStatusCode();
+
+                Program.Log(await response.Content.ReadAsStringAsync());
 
                 return await response.Content.ReadAsStringAsync();
             }
@@ -216,19 +218,26 @@ namespace ShopeeServer
         }
 
         // --- API WRAPPERS ---
-        public static async Task<string> GetOrderList(long fromDate, long toDate)
+        // Trong file ShopeeApi.cs
+
+        // Sửa hàm GetOrderList thành như sau:
+        public static async Task<string> GetOrderList(long fromDate, long toDate, string status = "READY_TO_SHIP")
         {
             var p = new Dictionary<string, string> {
-                { "time_range_field", "create_time" }, { "time_from", fromDate.ToString() },
-                { "time_to", toDate.ToString() }, { "page_size", "100" }, { "order_status", "READY_TO_SHIP" }
-            };
+        { "time_range_field", "create_time" },
+        { "time_from", fromDate.ToString() },
+        { "time_to", toDate.ToString() },
+        { "page_size", "100" },
+        { "order_status", status }, // <--- Dùng tham số truyền vào
+        { "request_order_status_pending", "true" }
+    };
             return await CallGetAPI("/api/v2/order/get_order_list", p);
         }
 
         public static async Task<string> GetOrderDetails(string sns)
         {
             return await CallGetAPI("/api/v2/order/get_order_detail", new Dictionary<string, string> {
-                { "order_sn_list", sns }, { "response_optional_fields", "item_list" }
+                { "order_sn_list", sns }, { "request_order_status_pending", "true" }, { "response_optional_fields", "item_list" }
             });
         }
 

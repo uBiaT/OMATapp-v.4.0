@@ -94,82 +94,118 @@ namespace ShopeeServer
             }
         }
 
+        // --- 4. LOGIC ĐỒNG BỘ MỚI (2 TRẠNG THÁI) ---
         static async Task CoreEngineSync()
         {
-            // Nếu chưa có Token thì bỏ qua vòng này
             if (string.IsNullOrEmpty(ShopeeApiHelper.AccessToken)) return;
 
-            Log("Đang đồng bộ đơn hàng từ Shopee...");
-            long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), from = DateTimeOffset.UtcNow.AddDays(-15).ToUnixTimeSeconds();
+            Log("Đang đồng bộ đơn hàng...");
+            long to = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            long from = DateTimeOffset.UtcNow.AddDays(-15).ToUnixTimeSeconds();
 
-            string json = await ShopeeApiHelper.GetOrderList(from, to);
+            // BƯỚC 1: Lấy danh sách ID của đơn "Chưa xử lý" (READY_TO_SHIP)
+            var readyIds = await FetchIds("READY_TO_SHIP", from, to);
 
-            // Xử lý khi Token hết hạn hoặc lỗi mạng
-            if (!json.Contains("\"response\""))
+            // BƯỚC 2: Lấy danh sách ID của đơn "Đã xử lý" (PROCESSED)
+            // Lưu ý: Nếu 'PROCESSED' không chạy, hãy thử đổi thành 'SHIPPED'
+            var processedIds = await FetchIds("PROCESSED", from, to);
+
+            if (readyIds == null || processedIds == null) return; // Lỗi mạng hoặc Token
+
+            lock (_lock)
             {
-                Log($"Lỗi lấy danh sách đơn: {json}");
-                if (await ShopeeApiHelper.RefreshTokenNow())
+                // A. DỌN DẸP: Xóa đơn đang Status=0 (Chưa xử lý) trong RAM mà KHÔNG còn nằm trong danh sách READY của Shopee
+                // (Nghĩa là đơn đó đã bị Hủy, hoặc đã chuyển sang trạng thái khác)
+                int removed = _dbOrders.RemoveAll(o => o.Status == 0 && !readyIds.Contains(o.OrderId));
+                if (removed > 0) Log($"Đã làm sạch {removed} đơn cũ/hủy khỏi danh sách chờ.");
+
+                // B. CẬP NHẬT: Đơn nào trong RAM đang là 0 mà lại xuất hiện bên list PROCESSED -> Chuyển thành 1
+                foreach (var id in processedIds)
                 {
-                    Log("Đã gia hạn Token thành công. Thử lại...");
-                    json = await ShopeeApiHelper.GetOrderList(from, to);
+                    var existing = _dbOrders.FirstOrDefault(o => o.OrderId == id);
+                    if (existing != null && existing.Status == 0)
+                    {
+                        existing.Status = 1;
+                        Log($"Đơn {id} đã được xử lý từ nơi khác -> Cập nhật Status = 1");
+                    }
                 }
-                else return;
             }
 
-            List<string> liveIds = new List<string>();
+            // C. THÊM MỚI: Tải chi tiết cho những đơn chưa có trong RAM
+            var newReady = readyIds.Where(id => !_dbOrders.Any(o => o.OrderId == id)).ToList();
+            var newProcessed = processedIds.Where(id => !_dbOrders.Any(o => o.OrderId == id)).ToList();
+
+            if (newReady.Count > 0) await FetchAndAddOrders(newReady, 0);       // Thêm vào thẻ "Chưa xử lý"
+            if (newProcessed.Count > 0) await FetchAndAddOrders(newProcessed, 1); // Thêm vào thẻ "Đã xử lý"
+        }
+
+        // Helper: Lấy danh sách ID theo trạng thái
+        static async Task<List<string>> FetchIds(string status, long from, long to)
+        {
+            string json = await ShopeeApiHelper.GetOrderList(from, to, status);
+            if (json.Contains("error") || !json.Contains("\"response\""))
+            {
+                Log($"Lỗi lấy đơn {status}: {json}");
+                if (await ShopeeApiHelper.RefreshTokenNow())
+                    json = await ShopeeApiHelper.GetOrderList(from, to, status);
+                else return null;
+            }
+
+            List<string> ids = new List<string>();
             using (JsonDocument doc = JsonDocument.Parse(json))
             {
                 if (doc.RootElement.TryGetProperty("response", out var r) && r.TryGetProperty("order_list", out var l))
-                    foreach (var i in l.EnumerateArray()) liveIds.Add(i.GetProperty("order_sn").GetString()!);
+                    foreach (var i in l.EnumerateArray()) ids.Add(i.GetProperty("order_sn").GetString()!);
             }
+            return ids;
+        }
 
-            // Xóa đơn cũ (chưa xử lý) không còn trên hệ thống
-            lock (_lock) { _dbOrders.RemoveAll(o => o.Status == 0 && !liveIds.Contains(o.OrderId)); }
-
-            // Tìm đơn mới
-            List<string> newIds;
-            lock (_lock) { newIds = liveIds.Where(id => !_dbOrders.Any(o => o.OrderId == id)).ToList(); }
-
-            if (newIds.Count > 0)
+        // Helper: Tải chi tiết và thêm vào RAM
+        static async Task FetchAndAddOrders(List<string> ids, int status)
+        {
+            Log($"Tải chi tiết {ids.Count} đơn mới (Status={status})...");
+            for (int i = 0; i < ids.Count; i += 50)
             {
-                Log($"Phát hiện {newIds.Count} đơn mới. Đang tải chi tiết...");
-                for (int i = 0; i < newIds.Count; i += 50)
+                string snStr = string.Join(",", ids.Skip(i).Take(50));
+                string detailJson = await ShopeeApiHelper.GetOrderDetails(snStr);
+                using (JsonDocument dDoc = JsonDocument.Parse(detailJson))
                 {
-                    string snStr = string.Join(",", newIds.Skip(i).Take(50));
-                    string detailJson = await ShopeeApiHelper.GetOrderDetails(snStr);
-                    using (JsonDocument dDoc = JsonDocument.Parse(detailJson))
+                    if (dDoc.RootElement.TryGetProperty("response", out var dr) && dr.TryGetProperty("order_list", out var dl))
                     {
-                        if (dDoc.RootElement.TryGetProperty("response", out var dr) && dr.TryGetProperty("order_list", out var dl))
+                        lock (_lock)
                         {
-                            lock (_lock)
+                            foreach (var o in dl.EnumerateArray())
                             {
-                                foreach (var o in dl.EnumerateArray())
+                                var ord = new Order
                                 {
-                                    var ord = new Order { OrderId = o.GetProperty("order_sn").GetString()!, CreatedAt = o.GetProperty("create_time").GetInt64(), Status = 0 };
-                                    foreach (var it in o.GetProperty("item_list").EnumerateArray())
+                                    OrderId = o.GetProperty("order_sn").GetString()!,
+                                    CreatedAt = o.GetProperty("create_time").GetInt64(),
+                                    Status = status // <--- Gán trạng thái 0 hoặc 1 tùy nguồn
+                                };
+                                foreach (var it in o.GetProperty("item_list").EnumerateArray())
+                                {
+                                    string name = it.GetProperty("model_name").GetString()!;
+                                    Dictionary<string, string> itemLocation = GetItemLocation(name);
+                                    ord.Items.Add(new OrderItem
                                     {
-                                        string name = it.GetProperty("model_name").GetString()!;
-                                        Dictionary<string, string> itemLocation = GetItemLocation(name);
-                                        ord.Items.Add(new OrderItem
-                                        {
-                                            ItemId = it.GetProperty("item_id").GetInt64(),
-                                            ProductName = it.GetProperty("item_name").GetString()!,
-                                            ModelName = name,
-                                            ImageUrl = it.GetProperty("image_info").GetProperty("image_url").GetString()!,
-                                            Quantity = it.GetProperty("model_quantity_purchased").GetInt32(),
-                                            SKU = it.GetProperty("model_sku").GetString() ?? "",
-                                            Shelf = itemLocation.ContainsKey("Shelf") ? $"Kệ {itemLocation["Shelf"]}" : null,
-                                            Level = itemLocation.ContainsKey("Level") ? $" - Ngăn {itemLocation["Level"]}" : null,
-                                            Box = itemLocation.ContainsKey("Box") ? $" - Thùng {itemLocation["Box"]}" : null
-                                        });
-                                    }
-                                    _dbOrders.Add(ord);
+                                        ItemId = it.GetProperty("item_id").GetInt64(),
+                                        ProductName = it.GetProperty("item_name").GetString()!,
+                                        ModelName = name,
+                                        ImageUrl = it.GetProperty("image_info").GetProperty("image_url").GetString()!,
+                                        Quantity = it.GetProperty("model_quantity_purchased").GetInt32(),
+                                        SKU = it.GetProperty("model_sku").GetString() ?? "",
+                                        Shelf = itemLocation.ContainsKey("Shelf") ? $"Kệ {itemLocation["Shelf"]}" : null,
+                                        Level = itemLocation.ContainsKey("Level") ? $" - Ngăn {itemLocation["Level"]}" : null,
+                                        Box = itemLocation.ContainsKey("Box") ? $" - Thùng {itemLocation["Box"]}" : null
+                                    });
                                 }
+                                // Kiểm tra lần cuối để tránh trùng lặp
+                                if (!_dbOrders.Any(x => x.OrderId == ord.OrderId))
+                                    _dbOrders.Add(ord);
                             }
                         }
                     }
                 }
-                Log("Đã tải xong chi tiết đơn hàng.");
             }
         }
 
