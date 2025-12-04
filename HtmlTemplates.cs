@@ -13,15 +13,26 @@
     <link rel='stylesheet' href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css'>
     <script src='https://unpkg.com/vue@3/dist/vue.global.js'></script>
     <style>
-        body { background-color: #f4f6f8; padding-bottom: 100px; font-size: 14px; font-family: -apple-system, sans-serif; }
+        html, body { height: 100%; overflow: hidden; background-color: #f4f6f8; font-size: 14px; font-family: -apple-system, sans-serif; user-select: none; }
+        #app { height: 100%; display: flex; flex-direction: column; }
         
-        /* Card Đơn hàng */
+        .scroll-area { flex-grow: 1; overflow-y: auto; padding-bottom: 80px; -webkit-overflow-scrolling: touch; position: relative; }
+        
+        /* Pull Refresh */
+        .pull-refresh-loader { height: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; background: #e9ecef; color: #6c757d; font-weight: bold; transition: height 0.2s ease-out; }
+        .pull-refresh-loader.refreshing { height: 50px !important; transition: height 0.2s; }
+        .pull-icon { transition: transform 0.3s; font-size: 1.5rem; margin-right: 8px; }
+        .pull-icon.rotate { transform: rotate(180deg); }
+        .spin-icon { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+
+        /* Card Styles */
         .card-item { background: white; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 10px; border: 1px solid #eee; overflow: hidden; }
         .card-body-custom { padding: 12px; display: flex; align-items: flex-start; position: relative; }
         
-        .img-box { position: relative; width: 90px; height: 90px; flex-shrink: 0; margin-right: 12px; cursor: pointer; }
-        .img-thumb { width: 100%; height: 100%; object-fit: cover; border-radius: 6px; border: 1px solid #eee; }
-        .zoom-icon { position: absolute; bottom: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 10px; padding: 2px 4px; border-radius: 4px 0 4px 0; }
+        .img-box { position: relative; width: 90px; height: 90px; flex-shrink: 0; margin-right: 12px; cursor: pointer; border-radius: 6px; overflow: hidden; border: 1px solid #eee; }
+        .img-thumb { width: 100%; height: 100%; object-fit: cover; }
+        .zoom-icon { position: absolute; bottom: 0; right: 0; background: rgba(0,0,0,0.6); color: white; font-size: 10px; padding: 2px 5px; border-radius: 4px 0 0 0; pointer-events: none; }
         
         .info-box { flex-grow: 1; min-width: 0; display: flex; flex-direction: column; }
         .product-name { font-weight: 700; color: #222; margin-bottom: 4px; line-height: 1.3; font-size: 13px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
@@ -32,170 +43,196 @@
         .qty-text { font-size: 25px; font-weight: 700; color: #333; }
         .qty-text.red { color: #d32f2f; }
         
-        /* Header đơn hàng */
-        .order-header { padding: 12px; background: white; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-radius: 8px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
-        .order-header.active { background: #e8f5e9; border: 1px solid #81c784; margin-bottom: 0; border-radius: 8px 8px 0 0; }
+        .order-header { padding: 12px; background: white; border-bottom: 1px solid #f0f0f0; cursor: pointer; display: flex; justify-content: space-between; align-items: center; border-radius: 8px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.05); transition: all 0.2s; }
+        .order-header.active { background: #e3f2fd; border: 1px solid #90caf9; border-left: 5px solid #0d6efd; margin-bottom: 0; border-radius: 4px 4px 0 0; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
         .highlight-sn { color: #d32f2f; font-weight: 900; background: #ffebee; padding: 0 2px; border-radius: 2px; }
-        .order-detail-box { background: #fafafa; border: 1px solid #81c784; border-top: none; border-radius: 0 0 8px 8px; padding: 10px; margin-bottom: 10px; }
+        .order-detail-box { background: #f8f9fa; border: 1px solid #90caf9; border-top: none; border-radius: 0 0 4px 4px; padding: 10px; margin-bottom: 10px; border-left: 5px solid #0d6efd; }
         
-        /* Console Log */
-        .console-box { background: #1e1e1e; color: #00ff00; font-family: monospace; padding: 10px; border-radius: 6px; height: 400px; overflow-y: auto; font-size: 12px; border: 1px solid #444; }
-        .log-line { border-bottom: 1px solid #333; padding: 2px 0; white-space: pre-wrap; word-break: break-all; }
-
-        /* Picking UI */
         .picking-group-header { background: #ff9800; color: white; padding: 8px 12px; font-weight: bold; border-radius: 6px; margin-top: 15px; margin-bottom: 8px; display: flex; justify-content: space-between; }
         .picking-card.done { opacity: 0.4; filter: grayscale(100%); }
-        .big-checkbox { width: 24px; height: 24px; accent-color: #2e7d32; margin-top: 2px; }
+        .picking-card.highlight-error { border: 2px solid #dc3545; background-color: #fff5f5; }
         
-        /* Modal Style */
-        .modal-main-img { width: 100%; height: 200px; object-fit: contain; background: #fff; }
+        .console-box { background: #1e1e1e; color: #00ff00; font-family: monospace; padding: 10px; border-radius: 6px; height: 400px; overflow-y: auto; font-size: 12px; border: 1px solid #444; }
+        .log-line { border-bottom: 1px solid #333; padding: 2px 0; white-space: pre-wrap; word-break: break-all; }
+        
+        .note-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.9em; margin-top: 4px; display:inline-block; font-weight:bold; }
+        .note-badge.normal { background: #ffecb3; color: #856404; border: 1px solid #ffeeba; }
+        .note-badge.green { background: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+        .note-badge.red { background: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+        
+        .btn-float-bottom { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 400px; z-index: 1050; padding: 12px; border-radius: 50px; font-weight: bold; box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
+        .big-checkbox { width: 24px; height: 24px; accent-color: #2e7d32; margin-top: 2px; }
         .comp-item { display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; }
-        .comp-item:hover { background: #f9f9f9; }
-        .comp-img { width: 40px; height: 40px; border-radius: 4px; border: 1px solid #ddd; margin-right: 10px; object-fit: cover; }
     </style>
 </head>
 <body>
-<div id='app' class='container py-2' style='max-width:600px'>
+<div id='app'>
     
-    <div class='d-flex justify-content-between align-items-center mb-3 bg-white p-3 rounded shadow-sm sticky-top'>
-        <div class='d-flex flex-column'>
+    <div class='bg-white p-3 shadow-sm z-3'>
+        <div class='d-flex justify-content-between align-items-center mb-2'>
             <span class='fw-bold text-primary h5 mb-0'>KHO HÀNG</span>
-            <div class='d-flex align-items-center mt-1'>
-                <i class='bi bi-zoom-out text-muted small me-1'></i>
-                <input type='range' class='form-range' style='width:90px' min='0.5' max='1.5' step='0.05' v-model='zoomLevel' @input='updateZoom'>
-                <i class='bi bi-zoom-in text-muted small ms-1'></i>
+            
+            <div class='d-flex align-items-center bg-light rounded px-2 py-1 border'>
+                <i class='bi bi-dash-circle-fill text-secondary fs-5' style='cursor:pointer' @click='adjustZoom(-0.1)'></i>
+                <input type='range' class='form-range mx-2' style='width:60px' min='0.6' max='1.4' step='0.1' v-model='zoomLevel' @input='updateZoom'>
+                <i class='bi bi-plus-circle-fill text-primary fs-5' style='cursor:pointer' @click='adjustZoom(0.1)'></i>
+            </div>
+
+            <div class='btn-group'>
+                <button class='btn btn-sm' :class='currentView==""manager"" ? ""btn-primary"" : ""btn-outline-primary""' @click='currentView=""manager""'>Đơn</button>
+                <button class='btn btn-sm' :class='currentView==""logs"" ? ""btn-primary"" : ""btn-outline-primary""' @click='fetchLogs(); currentView=""logs""'>Log</button>
             </div>
         </div>
-        
-        <div class='btn-group'>
-            <button class='btn btn-sm' :class='currentView==""manager"" ? ""btn-primary"" : ""btn-outline-primary""' @click='currentView=""manager""'>Đơn hàng</button>
-            <button class='btn btn-sm' :class='currentView==""logs"" ? ""btn-primary"" : ""btn-outline-primary""' @click='fetchLogs(); currentView=""logs""'>Hệ thống</button>
-        </div>
-    </div>
 
-    <div v-if='currentView === ""manager""'>
-        <div v-if='!hasToken' class='alert alert-danger mb-3 shadow-sm'>
-            <i class='bi bi-exclamation-triangle-fill'></i> Chưa kết nối Shopee. Vào Tab <b>Hệ thống</b> để đăng nhập ngay!
-        </div>
+        <div v-if='currentView === ""manager""'>
+            <ul class='nav nav-pills nav-fill bg-light p-1 rounded mb-2'>
+                <li class='nav-item'><a class='nav-link py-1' :class='{active: tab===""unprocessed""}' @click='tab=""unprocessed""'>Chờ xử lý ({{unprocessedOrders.length}})</a></li>
+                <li class='nav-item'><a class='nav-link py-1' :class='{active: tab===""processed""}' @click='tab=""processed""'>Đã xử lý ({{processedOrders.length}})</a></li>
+            </ul>
 
-        <ul class='nav nav-pills nav-fill mb-3 bg-white p-1 rounded shadow-sm'>
-            <li class='nav-item'><a class='nav-link' :class='{active: tab===""unprocessed""}' @click='tab=""unprocessed""'>Chờ xử lý ({{unprocessedOrders.length}})</a></li>
-            <li class='nav-item'><a class='nav-link' :class='{active: tab===""processed""}' @click='tab=""processed""'>Đã xử lý ({{processedOrders.length}})</a></li>
-        </ul>
+            <div class='d-flex align-items-center justify-content-between' v-if='tab===""unprocessed""'>
+                <div class='form-check ms-1'>
+                    <input class='form-check-input big-checkbox' type='checkbox' id='checkAll' :checked='isAllSelected' @change='toggleSelectAll'>
+                    <label class='form-check-label fw-bold ms-1 pt-1' for='checkAll'>Tất cả</label>
+                </div>
 
-        <div class='d-flex justify-content-between mb-2 align-items-center' v-if='tab===""unprocessed""'>
-            <div>
                 <button class='btn btn-sm btn-light border shadow-sm' @click='sortDesc = !sortDesc'>
                     <i class='bi' :class='sortDesc ? ""bi-sort-down"" : ""bi-sort-up""'></i> 
                     {{ sortDesc ? 'Mới nhất' : 'Cũ nhất' }}
                 </button>
-                <button class='btn btn-sm btn-light border shadow-sm ms-1' @click='fetchData' title='Tải lại'>
-                    <i class='bi bi-arrow-clockwise'></i>
-                </button>
-            </div>
-            
-            <button class='btn btn-sm shadow-sm fw-bold me-2' :class='isBatchMode ? ""btn-danger"" : ""btn-warning""' @click='toggleBatchMode'>
-                {{ isBatchMode ? '❌ Hủy' : '📦 Gom' }}
-            </button>
-        </div>
-
-        <div v-for='order in filteredOrders' :key='order.OrderId'>
-            <div class='order-header' :class='{active: openOrderId === order.OrderId}' @click='toggleOrder(order.OrderId)'>
-                <div class='d-flex align-items-center'>
-                    <input v-if='isBatchMode' type='checkbox' class='form-check-input me-3 big-checkbox' v-model='order.Selected' @click.stop>
-                    <div>
-                        <span style='font-family:monospace;font-size:1.1em'>#{{order.OrderId.slice(0, -4)}}<span class='highlight-sn'>{{order.OrderId.slice(-4)}}</span></span>
-                        <div class='small text-muted'>{{ formatTime(order.CreatedAt) }}</div>
+                
+                <div style='min-width: 90px; text-align: right;'>
+                    <div v-if='selectedCount > 0' class='dropdown'>
+                        <button class='btn btn-sm btn-success fw-bold shadow-sm dropdown-toggle' type='button' data-bs-toggle='dropdown'>
+                            Áp dụng ({{selectedCount}})
+                        </button>
+                        <ul class='dropdown-menu dropdown-menu-end shadow'>
+                            <li><button class='dropdown-item py-2 fw-bold' @click='startPicking'><i class='bi bi-box-seam me-2'></i>Gom đơn đi nhặt</button></li>
+                            <li><hr class='dropdown-divider'></li>
+                            <li><button class='dropdown-item py-2' @click='batchAddNote'><i class='bi bi-pencil-square me-2'></i>Ghi chú hàng loạt</button></li>
+                        </ul>
                     </div>
                 </div>
-                <span class='badge bg-secondary rounded-pill'>{{order.Items.length}} món</span>
-            </div>
-
-            <div v-if='openOrderId === order.OrderId' class='order-detail-box'>
-                <div v-for='item in order.Items' class='card-item border-0 mb-1'>
-                    <div class='card-body-custom'>
-                        <div class='img-box' @click.stop='showProductModal(item)'>
-                            <img :src='item.ImageUrl' class='img-thumb'>
-                            <div class='zoom-icon'><i class='bi bi-eye-fill'></i></div>
-                        </div>
-                        <div class='info-box'>
-                            <div class='product-name'>{{item.ProductName}}</div>
-                            <div class='variation-badge'>{{item.ModelName}}</div>
-                            <div v-if='item.Shelf' class='location-badge'>
-                                <i class='bi bi-geo-alt-fill'></i> {{item.Shelf}}{{item.Level}}
-                            </div>
-                        </div>
-                        <div class='qty-box'><span class='qty-text' :class='{red: item.Quantity > 1}'>x{{item.Quantity}}</span></div>
-                    </div>
-                </div>
-                <button v-if='!isBatchMode' class='btn btn-danger w-100 mt-2 fw-bold py-2' @click='shipOrder(order.OrderId)'>
-                    <i class='bi bi-printer-fill'></i> CHUẨN BỊ ĐƠN & IN
-                </button>
             </div>
         </div>
-
-        <button v-if='isBatchMode && selectedCount > 0' class='btn btn-sm btn-success btn-float fw-bold shadow-sm' @click='startPicking'>
-            Đi nhặt ({{selectedCount}})<i class='bi bi-arrow-right'></i>
-        </button>
-    </div>
-
-    <div v-if='currentView === ""picking""'>
-        <div class='sticky-top bg-white p-3 shadow-sm d-flex justify-content-between mb-3 align-items-center'>
+        
+        <div v-if='currentView === ""picking""' class='d-flex justify-content-between align-items-center'>
             <button class='btn btn-outline-secondary btn-sm' @click='currentView=""manager""'>Quay lại</button>
             <span class='fw-bold fs-5'>
                 Đã nhặt: <span class='text-success'>{{ pickedQty }}</span> / {{ totalQty }}
             </span>
         </div>
+    </div>
+
+    <div class='container py-2 scroll-area' ref='scrollContainer' 
+         @touchstart='pullStart' @touchmove='pullMove' @touchend='pullEnd'>
         
-        <div class='progress fixed-top' style='height: 5px; z-index: 2000;'>
-            <div class='progress-bar bg-success' :style='{width: (pickedQty / totalQty * 100) + ""%""}'></div>
+        <div class='pull-refresh-loader' :class='{refreshing: isRefreshing}' :style='{height: isRefreshing ? ""50px"" : pullHeight + ""px""}'>
+            <div v-if='isRefreshing'><i class='bi bi-arrow-repeat spin-icon fs-4'></i> Đang tải...</div>
+            <div v-else>
+                <i class='bi bi-arrow-down-circle pull-icon' :class='{rotate: pullHeight > 60}'></i>
+                {{ pullHeight > 60 ? 'Thả tay để tải lại' : 'Kéo xuống để tải' }}
+            </div>
         </div>
 
-        <div v-for='(group, loc) in groupedBatch' :key='loc'>
-            <div class='picking-group-header'>
-                <span><i class='bi bi-geo-alt-fill'></i> {{loc}}</span>
-                <span class='badge bg-white text-dark'>{{group.length}} loại</span>
+        <div v-if='currentView === ""manager""'>
+            <div v-if='!hasToken' class='alert alert-danger mb-3 shadow-sm'>
+                <i class='bi bi-exclamation-triangle-fill'></i> Chưa kết nối Shopee!
             </div>
-            
-            <div v-for='item in group' class='card-item picking-card' :class='{done: item.Picked}'>
-                <div class='card-body-custom'>
-                    <div class='img-box' @click.stop='showProductModal(item)'>
-                        <img :src='item.ImageUrl' class='img-thumb'>
+
+            <div v-for='order in filteredOrders' :key='order.OrderId'>
+                <div class='order-header' :class='{active: openOrderId === order.OrderId}' @click='toggleOrder(order.OrderId)'>
+                    <div class='d-flex align-items-start w-100'>
+                        <input type='checkbox' class='form-check-input me-3 big-checkbox flex-shrink-0' v-model='order.Selected' @click.stop>
+                        <div class='flex-grow-1 min-w-0'>
+                            <div class='d-flex align-items-center'>
+                                <span style='font-family:monospace;font-size:1.1em'>#...<span class='highlight-sn'>{{order.OrderId.slice(-4)}}</span></span>
+                                <i class='bi bi-pencil-square text-secondary ms-2' style='cursor:pointer' @click.stop='editNote(order)'></i>
+                            </div>
+                            <div class='small text-muted'>{{ formatTime(order.CreatedAt) }}</div>
+                            <div v-if='order.Note' class='note-badge' :class='getNoteClass(order.Note)'>
+                                <i class='bi bi-sticky-fill me-1'></i>{{order.Note}}
+                            </div>
+                        </div>
+                        <span class='badge bg-secondary rounded-pill ms-2'>{{order.Items.length}}</span>
                     </div>
-                    <div class='info-box'>
-                        <div class='product-name'>{{item.ProductName}}</div>
-                        <div class='variation-badge'>{{item.ModelName}}</div>
-                        <div class='small text-muted mt-1'>
-                            Đơn: <span v-for='id in item.OrderIds' class='badge bg-light text-dark border me-1'>{{id}}</span>
+                </div>
+
+                <div v-if='openOrderId === order.OrderId' class='order-detail-box'>
+                    <div v-for='item in order.Items' class='card-item border-0 mb-1'>
+                        <div class='card-body-custom'>
+                            <div class='img-box' @click.stop='showProductModal(item)'>
+                                <img :src='item.ImageUrl' class='img-thumb'>
+                                <div class='zoom-icon'><i class='bi bi-eye-fill'></i></div>
+                            </div>
+                            <div class='info-box'>
+                                <div class='product-name'>{{item.ProductName}}</div>
+                                <div class='variation-badge'>{{item.ModelName}}</div>
+                                <div v-if='item.Shelf' class='location-badge'>
+                                    <i class='bi bi-geo-alt-fill'></i> {{item.Shelf}}{{item.Level}}
+                                </div>
+                            </div>
+                            <div class='qty-box'><span class='qty-text' :class='{red: item.Quantity > 1}'>x{{item.Quantity}}</span></div>
                         </div>
                     </div>
-                    <div class='qty-box'>
-                        <span class='qty-text' :class='{red: item.TotalQty > 1}'>{{item.TotalQty}}</span>
-                        <input type='checkbox' class='big-checkbox mt-2' v-model='item.Picked'>
+                    <button class='btn btn-danger w-100 mt-2 fw-bold py-2' @click='confirmShip(order.OrderId)'>
+                        <i class='bi bi-printer-fill'></i> CHUẨN BỊ ĐƠN
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div v-if='currentView === ""picking""'>
+            <div v-for='(group, loc) in groupedBatch' :key='loc'>
+                <div class='picking-group-header'>
+                    <span><i class='bi bi-geo-alt-fill'></i> {{loc}}</span>
+                    <span class='badge bg-white text-dark'>{{group.length}} loại</span>
+                </div>
+                <div v-for='item in group' class='card-item picking-card' :class='getPickingCardClass(item)'>
+                    <div class='card-body-custom'>
+                        <div class='img-box' @click.stop='showProductModal(item)'>
+                            <img :src='item.ImageUrl' class='img-thumb'>
+                        </div>
+                        <div class='info-box'>
+                            <div class='product-name'>{{item.ProductName}}</div>
+                            <div class='variation-badge'>{{item.ModelName}}</div>
+                            <div class='small text-muted mt-1'>
+                                Đơn: <span v-for='id in item.OrderIds' class='badge bg-light text-dark border me-1'>{{id}}</span>
+                            </div>
+                        </div>
+                        <div class='qty-box'>
+                            <span class='qty-text' :class='{red: item.TotalQty > 1}'>{{item.TotalQty}}</span>
+                            <input type='checkbox' class='big-checkbox mt-2' v-model='item.Picked'>
+                        </div>
                     </div>
+                </div>
+            </div>
+            <button class='btn btn-primary btn-float-bottom shadow' @click='finishPicking'>
+                <i class='bi bi-check2-circle me-2'></i>HOÀN THÀNH
+            </button>
+        </div>
+
+        <div v-if='currentView === ""logs""'>
+            <div class='card-item p-3'>
+                <div class='console-box'>
+                    <div v-for='line in logs' class='log-line'>{{line}}</div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div v-if='currentView === ""logs""'>
-        <div class='card-item p-3 mb-3 border-warning border-2'>
-            <h5><i class='bi bi-key-fill'></i> Kết nối Shopee</h5>
-            <div v-if='hasToken' class='text-success fw-bold mb-2'><i class='bi bi-check-circle-fill'></i> Đã kết nối</div>
-            <div v-else class='text-danger fw-bold mb-2'><i class='bi bi-x-circle-fill'></i> Chưa kết nối</div>
-            <hr>
-            <a :href='loginUrl' target='_blank' class='btn btn-warning w-100 mb-2 fw-bold'>Bước 1: Lấy Link Đăng Nhập</a>
-            <textarea v-model='callbackUrl' class='form-control mb-2' rows='3' placeholder='Bước 2: Dán link kết quả (Callback URL) vào đây...'></textarea>
-            <button class='btn btn-primary w-100' @click='doLogin' :disabled='!callbackUrl'>Lưu Kết Nối</button>
-        </div>
-
-        <div class='card-item p-3'>
-            <div class='d-flex justify-content-between mb-2'>
-                <h5 class='text-dark'><i class='bi bi-terminal-fill'></i> Server Logs</h5>
-                <button class='btn btn-sm btn-light border' @click='fetchLogs'><i class='bi bi-arrow-clockwise'></i></button>
-            </div>
-            <div class='console-box'>
-                <div v-for='line in logs' class='log-line'>{{line}}</div>
+    <div class='modal fade' id='confirmModal' tabindex='-1'>
+        <div class='modal-dialog modal-dialog-centered'>
+            <div class='modal-content'>
+                <div class='modal-header'>
+                    <h5 class='modal-title fw-bold'>Xác nhận</h5>
+                    <button type='button' class='btn-close' data-bs-dismiss='modal'></button>
+                </div>
+                <div class='modal-body'><p class='mb-0 fs-6'>{{ confirmMessage }}</p></div>
+                <div class='modal-footer'>
+                    <button type='button' class='btn btn-secondary' data-bs-dismiss='modal'>Hủy</button>
+                    <button type='button' class='btn btn-primary fw-bold' @click='executeConfirm'>Đồng ý</button>
+                </div>
             </div>
         </div>
     </div>
@@ -204,26 +241,28 @@
         <div class='modal-dialog modal-dialog-centered'>
             <div class='modal-content'>
                 <div class='modal-header border-0 pb-0'>
-                    <h6 class='modal-title fw-bold text-primary'>CHI TIẾT & TỒN KHO</h6>
+                    <h6 class='modal-title fw-bold text-primary'>CHI TIẾT</h6>
                     <button type='button' class='btn-close' data-bs-dismiss='modal'></button>
                 </div>
                 <div class='modal-body pt-2'>
-                    <div v-if='loadingModal' class='text-center py-5 text-warning fw-bold'>
-                        <div class='spinner-border'></div><br>Đang tải dữ liệu...
-                    </div>
+                    <div v-if='loadingModal' class='text-center py-5 text-warning'>Loading...</div>
                     <div v-else>
-                        <div class='text-center mb-3'>
-                            <img :src='modalItem.img' class='modal-main-img rounded border mb-2'>
+                        <div class='text-center mb-2'>
+                            <img :src='modalItem.img' 
+                                 style='width:100%;height:350px;object-fit:contain;touch-action:none' 
+                                 class='rounded border mb-2'
+                                 @touchstart='modalTouchStart'
+                                 @touchend='modalTouchEnd'>
                             <h6 class='fw-bold text-dark px-2'>{{modalItem.name}}</h6>
-                            <div class='badge bg-success fs-5 p-2 mt-1'>Kho: {{modalItem.stock}}</div>
+                            <div class='text-muted small fst-italic'>*Vuốt ảnh lên/xuống để chuyển loại</div>
                         </div>
                         <div class='card bg-light border-0'>
-                            <div class='card-header bg-transparent fw-bold small text-muted'>PHÂN LOẠI KHÁC</div>
-                            <div class='card-body p-0' style='max-height:200px;overflow-y:auto'>
-                                <div v-for='v in variations' class='comp-item' @click='selectVariation(v)'>
-                                    <img :src='v.img' class='comp-img'>
+                            <div class='card-body p-0' style='max-height:120px;overflow-y:auto'>
+                                <div v-for='v in variations' class='comp-item' 
+                                     :class='{""bg-warning-subtle"": v.name === modalItem.name}'
+                                     @click='selectVariation(v)'>
+                                    <img :src='v.img' style='width:40px;height:40px;border-radius:4px;margin-right:10px'>
                                     <div class='flex-grow-1 small fw-bold'>{{v.name}}</div>
-                                    <div class='fw-bold text-success'>{{v.stock}}</div>
                                 </div>
                             </div>
                         </div>
@@ -242,12 +281,14 @@
         data() {
             return {
                 orders: [], tab: 'unprocessed', currentView: 'manager', 
-                sortDesc: false, 
-                logs: [], hasToken: false, loginUrl: '', callbackUrl: '',
-                isBatchMode: false, batchItems: [], 
-                openOrderId: null, 
-                loadingModal: false, modalItem: {}, variations: [],
-                zoomLevel: 1.0 // Biến Zoom
+                sortDesc: false, logs: [], hasToken: false, loginUrl: '', callbackUrl: '',
+                isBatchMode: false, batchItems: [], showUnpickedHighlight: false,
+                openOrderId: null, loadingModal: false, modalItem: {}, variations: [],
+                zoomLevel: 1.0,
+                confirmMessage: '', pendingConfirmAction: null, confirmModalInstance: null,
+                pullStartY: 0, pullHeight: 0, isRefreshing: false,
+                // SWIPE VARIABLES
+                modalTouchStartY: 0, modalTouchEndY: 0
             }
         },
         computed: {
@@ -258,6 +299,10 @@
                 return [...list].sort((a, b) => this.sortDesc ? b.CreatedAt - a.CreatedAt : a.CreatedAt - b.CreatedAt);
             },
             selectedCount() { return this.orders.filter(o => o.Selected).length; },
+            isAllSelected() {
+                const list = this.filteredOrders;
+                return list.length > 0 && list.every(o => o.Selected);
+            },
             groupedBatch() {
                 const groups = {};
                 this.batchItems.forEach(i => {
@@ -270,70 +315,190 @@
             totalQty() { return this.batchItems.reduce((s, i) => s + i.TotalQty, 0); },
             pickedQty() { return this.batchItems.reduce((s, i) => s + (i.Picked ? i.TotalQty : 0), 0); }
         },
+        watch: {
+            tab() {
+                this.orders.forEach(o => o.Selected = false);
+                this.openOrderId = null;
+            }
+        },
         mounted() {
             this.fetchData();
-            this.updateZoom(); // Load zoom mặc định
             setInterval(this.fetchData, 5000);
             setInterval(this.fetchLogs, 3000);
+            this.updateZoom();
+            this.confirmModalInstance = new bootstrap.Modal(document.getElementById('confirmModal'));
         },
         methods: {
-            updateZoom() { document.body.style.zoom = this.zoomLevel; },
             formatTime(ts) { return new Date(ts * 1000).toLocaleString('vi-VN'); },
+            updateZoom() { document.body.style.zoom = this.zoomLevel; },
+            adjustZoom(delta) { this.zoomLevel = Math.max(0.6, Math.min(1.4, parseFloat(this.zoomLevel) + delta)); this.updateZoom(); },
+
+            pullStart(e) {
+                if (this.$refs.scrollContainer.scrollTop === 0) {
+                    this.pullStartY = e.touches[0].clientY;
+                }
+            },
+            pullMove(e) {
+                if (this.pullStartY > 0 && !this.isRefreshing) {
+                    const y = e.touches[0].clientY;
+                    const diff = y - this.pullStartY;
+                    if (diff > 0) {
+                        this.pullHeight = diff > 80 ? 80 : diff;
+                    }
+                }
+            },
+            pullEnd(e) {
+                if (this.pullHeight > 60) {
+                    this.isRefreshing = true;
+                    this.pullHeight = 50;
+                    this.fetchData().then(() => {
+                        setTimeout(() => {
+                            this.isRefreshing = false;
+                            this.pullHeight = 0;
+                        }, 500);
+                    });
+                } else {
+                    this.pullHeight = 0;
+                }
+                this.pullStartY = 0;
+            },
+
+            // --- SWIPE LOGIC FOR MODAL ---
+            modalTouchStart(e) {
+                this.modalTouchStartY = e.changedTouches[0].screenY;
+            },
+            modalTouchEnd(e) {
+                this.modalTouchEndY = e.changedTouches[0].screenY;
+                this.handleModalSwipe();
+            },
+            handleModalSwipe() {
+                const diff = this.modalTouchStartY - this.modalTouchEndY;
+                // Threshold 50px
+                if (Math.abs(diff) < 50) return;
+
+                const currentIdx = this.variations.findIndex(v => v.name === this.modalItem.name);
+                if (currentIdx === -1) return;
+
+                let nextIdx = -1;
+                
+                if (diff > 0) { // Vuốt lên -> Next (xuống dưới danh sách)
+                    nextIdx = (currentIdx + 1) % this.variations.length;
+                } else { // Vuốt xuống -> Prev (lên trên danh sách)
+                    nextIdx = (currentIdx - 1 + this.variations.length) % this.variations.length;
+                }
+
+                if (nextIdx !== -1) {
+                    this.selectVariation(this.variations[nextIdx]);
+                }
+            },
+
             async fetchData() {
                 try {
                     const res = await fetch('/api/data');
                     const data = await res.json();
                     this.hasToken = data.hasToken;
                     this.loginUrl = data.loginUrl;
-                    const selectedIds = new Set(this.orders.filter(o => o.Selected).map(o => o.OrderId));
+                    const oldMap = new Map(this.orders.map(o => [o.OrderId, o]));
                     if(JSON.stringify(this.orders.map(o=>o.OrderId)) !== JSON.stringify(data.orders.map(o=>o.OrderId))) {
-                         this.orders = data.orders.map(o => ({...o, Selected: selectedIds.has(o.OrderId)}));
+                         this.orders = data.orders.map(o => {
+                             const old = oldMap.get(o.OrderId);
+                             return { ...o, Selected: old ? old.Selected : false, Note: old ? old.Note : '' };
+                         });
                     }
                 } catch(e) {}
             },
-            async fetchLogs() {
-                if(this.currentView !== 'logs') return;
-                try {
-                    const res = await fetch('/api/logs');
-                    this.logs = await res.json();
-                } catch(e) {}
-            },
-            async doLogin() {
+            async fetchLogs() { if(this.currentView === 'logs') { const res = await fetch('/api/logs'); this.logs = await res.json(); } },
+            async doLogin() { 
                 if(!this.callbackUrl) return;
                 try {
-                    const res = await fetch('/api/login', {
-                        method: 'POST',
-                        body: JSON.stringify({url: this.callbackUrl})
-                    });
-                    const d = await res.json();
-                    if(d.success) {
-                        alert('Đăng nhập thành công!');
-                        this.callbackUrl = '';
-                        this.fetchLogs();
-                    } else { alert('Lỗi: ' + (d.message || 'Link sai')); }
+                    await fetch('/api/login', { method: 'POST', body: JSON.stringify({url: this.callbackUrl}) });
+                    alert('Đã gửi yêu cầu đăng nhập!');
+                    this.callbackUrl = '';
                 } catch(e) { alert('Lỗi mạng'); }
             },
-            toggleBatchMode() { 
-                this.isBatchMode = !this.isBatchMode; 
-                this.orders.forEach(o => o.Selected = false); 
-                this.openOrderId = null;
+            
+            toggleSelectAll(e) {
+                const checked = e.target.checked;
+                this.filteredOrders.forEach(o => o.Selected = checked);
             },
-            toggleOrder(id) {
-                if (this.isBatchMode) { 
-                    const o = this.orders.find(x => x.OrderId === id); 
-                    if(o) o.Selected = !o.Selected; 
-                } else { this.openOrderId = (this.openOrderId === id) ? null : id; }
+            toggleOrder(id) { this.openOrderId = (this.openOrderId === id) ? null : id; },
+
+            editNote(order) {
+                const current = order.Note || '';
+                const input = prompt('Nhập ghi chú:', current);
+                if (input !== null) order.Note = input;
             },
-            async shipOrder(id) {
-                let nextId = null;
-                const currentIdx = this.filteredOrders.findIndex(o => o.OrderId === id);
-                if (currentIdx !== -1 && currentIdx + 1 < this.filteredOrders.length) {
-                    nextId = this.filteredOrders[currentIdx + 1].OrderId;
+            batchAddNote() {
+                const input = prompt('Nhập ghi chú cho ' + this.selectedCount + ' đơn:');
+                if (input !== null) this.orders.filter(o => o.Selected).forEach(o => o.Note = input);
+            },
+            getNoteClass(note) {
+                if (!note) return '';
+                if (note.toLowerCase() === 'đã soạn') return 'green';
+                if (note.toLowerCase() === 'chưa soạn') return 'red';
+                return 'normal';
+            },
+            getPickingCardClass(item) {
+                return {
+                    'done': item.Picked,
+                    'highlight-error': this.showUnpickedHighlight && !item.Picked
+                };
+            },
+
+            showConfirm(msg, action) {
+                this.confirmMessage = msg;
+                this.pendingConfirmAction = action;
+                this.confirmModalInstance.show();
+            },
+            executeConfirm() {
+                if(this.pendingConfirmAction) this.pendingConfirmAction();
+                this.confirmModalInstance.hide();
+            },
+
+            confirmShip(id) {
+                this.showConfirm('Bạn chắc chắn muốn chuẩn bị đơn này?', () => {
+                    this.shipOrder(id);
+                });
+            },
+
+            finishPicking() {
+                const unpicked = this.batchItems.filter(i => !i.Picked);
+                if (unpicked.length === 0) {
+                    this.applyNoteToOrders(this.batchItems, 'Đã soạn');
+                    this.closePicking();
+                } else {
+                    this.showUnpickedHighlight = true;
+                    this.showConfirm('Còn ' + unpicked.length + ' loại chưa nhặt. Vẫn hoàn thành và đánh dấu lỗi?', () => {
+                        const picked = this.batchItems.filter(i => i.Picked);
+                        this.applyNoteToOrders(picked, 'Đã soạn');
+                        this.applyNoteToOrders(unpicked, 'Chưa soạn');
+                        this.closePicking();
+                    });
                 }
-                await fetch(`/api/ship?id=${id}`, {method: 'POST'});
-                const o = this.orders.find(x => x.OrderId === id);
-                if(o) o.Status = 1;
-                if (nextId) this.openOrderId = nextId; else this.openOrderId = null;
+            },
+            applyNoteToOrders(items, note) {
+                items.forEach(item => {
+                    item.OrderIds.forEach(shortId => {
+                        const order = this.orders.find(o => o.OrderId.endsWith(shortId) && o.Selected);
+                        if (order) {
+                            if (note === 'Đã soạn' && order.Note === 'Chưa soạn') return;
+                            order.Note = note;
+                        }
+                    });
+                });
+            },
+            closePicking() {
+                this.isBatchMode = false;
+                this.orders.forEach(o => o.Selected = false);
+                this.currentView = 'manager';
+                this.showUnpickedHighlight = false;
+            },
+
+            async shipOrder(id) { 
+                await fetch(`/api/ship?id=${id}`, {method: 'POST'}); 
+                const o = this.orders.find(x => x.OrderId === id); 
+                if(o) { o.Status = 1; o.Selected = false; }
+                this.openOrderId = null; 
             },
             startPicking() {
                 const selected = this.orders.filter(o => o.Selected);
@@ -343,9 +508,12 @@
                     order.Items.forEach(item => {
                         const key = item.ModelName; 
                         if(!agg[key]) agg[key] = { 
-                            ProductName: item.ProductName, ModelName: item.ModelName, 
-                            ImageUrl: item.ImageUrl, Location: item.Shelf || 'Chưa định vị', 
-                            TotalQty: 0, OrderIds: [], Picked: false 
+                            ProductName: item.ProductName, 
+                            ModelName: item.ModelName, 
+                            ImageUrl: item.ImageUrl, 
+                            Location: item.Shelf || 'Chưa định vị', 
+                            TotalQty: 0, OrderIds: [], Picked: false,
+                            ItemId: item.ItemId 
                         };
                         agg[key].TotalQty += item.Quantity;
                         agg[key].OrderIds.push(order.OrderId.slice(-4));
@@ -356,7 +524,7 @@
             },
             async showProductModal(item) {
                 this.loadingModal = true;
-                this.modalItem = { name: item.ModelName, img: item.ImageUrl, stock: '...' };
+                this.modalItem = { name: item.ModelName, img: item.ImageUrl }; 
                 this.variations = [];
                 new bootstrap.Modal(document.getElementById('productModal')).show();
                 try {
@@ -365,12 +533,12 @@
                     if(data.success) {
                         this.variations = data.variations;
                         const current = this.variations.find(v => v.name === item.ModelName);
-                        if(current) this.modalItem = { ...current, name: current.name, img: current.img, stock: current.stock };
+                        if(current) this.modalItem = { ...current, name: current.name, img: current.img };
                     }
                 } catch(e) {}
                 this.loadingModal = false;
             },
-            selectVariation(v) { this.modalItem = { name: v.name, img: v.img, stock: v.stock }; }
+            selectVariation(v) { this.modalItem = { name: v.name, img: v.img }; }
         }
     }).mount('#app');
 </script>
